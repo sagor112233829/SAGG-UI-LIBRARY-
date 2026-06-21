@@ -1,0 +1,1005 @@
+--[[
+	UILib – Mobile‑first GUI library
+	- Library name: "SAGG LIBRARY"
+	- Script name: configurable (default: "SAGG SCRIPT")
+	- Loading screen: shows script name + "BY SAGG SCEPTER"
+	- Two theme controls: Accent Colour & Colour Scheme
+	- Save / Reset config
+	- Accurate loading timing (tick‑based)
+]]
+local UILib = {}
+
+-- ============================
+--  CONFIGURATION
+-- ============================
+local SCRIPT_NAME = "SAGG SCRIPT"  -- change this to your script name
+
+local DEFAULT_CONFIG = {
+	accentTheme = "Light Purple",
+	colorScheme = "Light",
+	scale = 1.0,
+	loadingDuration = 2,  -- seconds
+}
+local config = {
+	accentTheme = DEFAULT_CONFIG.accentTheme,
+	colorScheme = DEFAULT_CONFIG.colorScheme,
+	scale = DEFAULT_CONFIG.scale,
+	loadingDuration = DEFAULT_CONFIG.loadingDuration,
+}
+
+-- ============================
+--  THEME DEFINITIONS
+-- ============================
+local ACCENT_THEMES = {
+	["Light Purple"] = { Accent = Color3.fromRGB(170,130,255), AccentDark = Color3.fromRGB(140,100,230) },
+	["Blue"]        = { Accent = Color3.fromRGB(66,133,244),  AccentDark = Color3.fromRGB(47,98,186)  },
+	["Pink"]        = { Accent = Color3.fromRGB(233,30,99),   AccentDark = Color3.fromRGB(185,24,79)  },
+	["Green"]       = { Accent = Color3.fromRGB(76,175,80),   AccentDark = Color3.fromRGB(56,142,60)  },
+	["Orange"]      = { Accent = Color3.fromRGB(255,152,0),   AccentDark = Color3.fromRGB(230,125,0)  },
+}
+
+local COLOUR_SCHEMES = {
+	Light = {
+		Background = Color3.fromRGB(245,240,255),
+		Sidebar    = Color3.fromRGB(235,225,250),
+		Card       = Color3.fromRGB(255,255,255),
+		CardHover  = Color3.fromRGB(225,210,250),
+		Text       = Color3.fromRGB(60,50,80),
+		SubText    = Color3.fromRGB(140,130,160),
+	},
+	Dark = {
+		Background = Color3.fromRGB(30,30,40),
+		Sidebar    = Color3.fromRGB(40,40,55),
+		Card       = Color3.fromRGB(50,50,65),
+		CardHover  = Color3.fromRGB(70,70,90),
+		Text       = Color3.fromRGB(220,220,240),
+		SubText    = Color3.fromRGB(180,180,200),
+	},
+	Amber = {
+		Background = Color3.fromRGB(255,248,225),
+		Sidebar    = Color3.fromRGB(245,235,210),
+		Card       = Color3.fromRGB(255,252,240),
+		CardHover  = Color3.fromRGB(235,220,190),
+		Text       = Color3.fromRGB(80,60,30),
+		SubText    = Color3.fromRGB(160,140,100),
+	},
+	Mint = {
+		Background = Color3.fromRGB(225,245,235),
+		Sidebar    = Color3.fromRGB(210,235,220),
+		Card       = Color3.fromRGB(240,255,245),
+		CardHover  = Color3.fromRGB(200,225,210),
+		Text       = Color3.fromRGB(30,70,60),
+		SubText    = Color3.fromRGB(130,170,150),
+	},
+}
+
+local THEME = {}
+local function ApplyThemes()
+	local acc = ACCENT_THEMES[config.accentTheme] or ACCENT_THEMES["Light Purple"]
+	THEME.Accent = acc.Accent
+	-- Make AccentDark visible in dark mode
+	local scheme = COLOUR_SCHEMES[config.colorScheme] or COLOUR_SCHEMES.Light
+	if config.colorScheme == "Dark" then
+		THEME.AccentDark = Color3.fromRGB(
+			math.min(255, acc.AccentDark.R * 1.5),
+			math.min(255, acc.AccentDark.G * 1.5),
+			math.min(255, acc.AccentDark.B * 1.5)
+		)
+	else
+		THEME.AccentDark = acc.AccentDark
+	end
+	for k, v in pairs(scheme) do
+		THEME[k] = v
+	end
+end
+ApplyThemes()
+
+-- ============================
+--  PRIVATE STATE
+-- ============================
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer
+
+local GUI, LoadingScreen, MainFrame, OpenBtn, Sidebar, Content
+local TabButtons = {}
+local TabPages = {}
+local CurrentTab
+local accentElements = {}
+local schemeElements = {}
+local allDropdowns = {}
+
+-- ============================
+--  UTILITY
+-- ============================
+local function GetViewportSize()
+	local cam = workspace.CurrentCamera
+	return cam and cam.ViewportSize or Vector2.new(800,600)
+end
+
+local function MakeDraggable(uiElement, dragHandle)
+	local dragging = false
+	local dragStart, startPos
+	local connection
+	dragHandle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = uiElement.Position
+			if connection then connection:Disconnect() end
+			connection = UIS.InputChanged:Connect(function(change)
+				if dragging and (change.UserInputType == Enum.UserInputType.MouseMovement or change.UserInputType == Enum.UserInputType.Touch) then
+					local delta = change.Position - dragStart
+					local scale = uiElement:FindFirstChildOfClass("UIScale") and uiElement:FindFirstChildOfClass("UIScale").Scale or 1
+					local newX = startPos.X.Offset + (delta.X/scale)
+					local newY = startPos.Y.Offset + (delta.Y/scale)
+					local vp = GetViewportSize()
+					local maxX = (vp.X/scale) - uiElement.AbsoluteSize.X
+					local maxY = (vp.Y/scale) - uiElement.AbsoluteSize.Y
+					if startPos.X.Scale > 0 then newX = newX + (vp.X * startPos.X.Scale) end
+					if startPos.Y.Scale > 0 then newY = newY + (vp.Y * startPos.Y.Scale) end
+					newX = math.clamp(newX, 0, math.max(0, maxX))
+					newY = math.clamp(newY, 0, math.max(0, maxY))
+					uiElement.Position = UDim2.new(0, newX, 0, newY)
+				end
+			end)
+		end
+	end)
+	dragHandle.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+			if connection then
+				connection:Disconnect()
+				connection = nil
+			end
+		end
+	end)
+end
+
+local function UpdateScale()
+	local vp = GetViewportSize()
+	if not MainFrame or not OpenBtn then return end
+	local mainScale = MainFrame:FindFirstChildOfClass("UIScale")
+	local openScale = OpenBtn:FindFirstChildOfClass("UIScale")
+	local s = config.scale
+	if vp.X < 600 then
+		s = math.clamp(s * vp.X/550, 0.4, 1.2)
+	end
+	if mainScale then mainScale.Scale = s end
+	if openScale then openScale.Scale = s end
+end
+
+-- ============================
+--  DROPDOWN MANAGER
+-- ============================
+local function CloseAllDropdowns(skip)
+	for _, frame in ipairs(allDropdowns) do
+		if frame ~= skip and frame:GetAttribute("Open") == true then
+			frame:SetAttribute("Open", false)
+			local arrow = frame:FindFirstChild("Arrow")
+			if arrow then arrow.Rotation = 0 end
+			TweenService:Create(frame, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+				Size = UDim2.new(1,0,0,44)
+			}):Play()
+			task.delay(0.2, function()
+				if not frame:GetAttribute("Open") then frame.ZIndex = 2 end
+			end)
+		end
+	end
+end
+
+-- ============================
+--  REFRESH ALL UI
+-- ============================
+local function RefreshAllUI()
+	-- Update accent elements
+	for _, el in ipairs(accentElements) do
+		if el and el.Parent then
+			local colorType = el:GetAttribute("ColorType")
+			if colorType == "Accent" then
+				if el:IsA("TextButton") or el:IsA("Frame") then
+					el.BackgroundColor3 = THEME.Accent
+				elseif el:IsA("UIStroke") then
+					el.Color = THEME.Accent
+				end
+			elseif colorType == "AccentDark" then
+				if el:IsA("TextButton") or el:IsA("Frame") then
+					el.BackgroundColor3 = THEME.AccentDark
+				elseif el:IsA("UIStroke") then
+					el.Color = THEME.AccentDark
+				elseif el:IsA("TextLabel") then
+					el.TextColor3 = THEME.AccentDark
+				end
+			end
+		end
+	end
+
+	-- Update scheme elements
+	for _, el in ipairs(schemeElements) do
+		if el and el.Parent then
+			local colorType = el:GetAttribute("ColorType")
+			if colorType and THEME[colorType] then
+				if el:IsA("TextLabel") or el:IsA("TextButton") then
+					el.TextColor3 = THEME[colorType]
+				else
+					el.BackgroundColor3 = THEME[colorType]
+				end
+			end
+		end
+	end
+
+	-- Update dropdowns specifically
+	for _, frame in ipairs(allDropdowns) do
+		if frame and frame.Parent then
+			local label = frame:FindFirstChildOfClass("TextLabel")
+			if label then label.TextColor3 = THEME.Text end
+			local arrow = frame:FindFirstChild("Arrow")
+			if arrow then arrow.TextColor3 = THEME.SubText end
+			local optionsList = frame:FindFirstChildOfClass("Frame")
+			if optionsList then
+				for _, btn in ipairs(optionsList:GetChildren()) do
+					if btn:IsA("TextButton") then
+						btn.TextColor3 = THEME.Text
+						btn.BackgroundColor3 = THEME.CardHover
+					end
+				end
+			end
+		end
+	end
+
+	-- Main window
+	if MainFrame then
+		MainFrame.BackgroundColor3 = THEME.Background
+		local stroke = MainFrame:FindFirstChildOfClass("UIStroke")
+		if stroke then stroke.Color = THEME.Accent end
+	end
+
+	if Sidebar then Sidebar.BackgroundColor3 = THEME.Sidebar end
+
+	if OpenBtn then
+		OpenBtn.BackgroundColor3 = THEME.Accent
+		local stroke = OpenBtn:FindFirstChildOfClass("UIStroke")
+		if stroke then stroke.Color = THEME.AccentDark end
+	end
+
+	for _, btn in pairs(TabButtons) do
+		if btn.BackgroundColor3 == THEME.Accent then
+			btn.BackgroundColor3 = THEME.Accent
+			btn.TextColor3 = Color3.fromRGB(255,255,255)
+		else
+			btn.BackgroundColor3 = THEME.Sidebar
+			btn.TextColor3 = THEME.SubText
+		end
+	end
+
+	if Content then Content.ScrollBarImageColor3 = THEME.Accent end
+end
+
+-- ============================
+--  BUILD GUI
+-- ============================
+local function BuildGUI()
+	if player.PlayerGui:FindFirstChild("UILib_GUI") then
+		player.PlayerGui.UILib_GUI:Destroy()
+	end
+	accentElements = {}
+	schemeElements = {}
+	allDropdowns = {}
+
+	local ScreenGui = Instance.new("ScreenGui")
+	ScreenGui.Name = "UILib_GUI"
+	ScreenGui.ResetOnSpawn = false
+	ScreenGui.IgnoreGuiInset = true
+	ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	ScreenGui.Parent = player.PlayerGui
+	GUI = ScreenGui
+
+	-- ========== LOADING SCREEN ==========
+	local loading = Instance.new("Frame")
+	loading.Name = "LoadingScreen"
+	loading.Size = UDim2.new(1,0,1,0)
+	loading.BackgroundColor3 = Color3.fromRGB(30,30,40)
+	loading.BorderSizePixel = 0
+	loading.Parent = ScreenGui
+	LoadingScreen = loading
+
+	local center = Instance.new("Frame")
+	center.Size = UDim2.new(0,300,0,160)
+	center.Position = UDim2.new(0.5,-150,0.5,-80)
+	center.BackgroundTransparency = 1
+	center.Parent = loading
+
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(1,0,0,50)
+	title.Position = UDim2.new(0,0,0,0)
+	title.BackgroundTransparency = 1
+	title.Text = SCRIPT_NAME
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 32
+	title.TextColor3 = Color3.fromRGB(255,255,255)
+	title.TextScaled = true
+	title.Parent = center
+
+	local subtitle = Instance.new("TextLabel")
+	subtitle.Size = UDim2.new(1,0,0,30)
+	subtitle.Position = UDim2.new(0,0,0,50)
+	subtitle.BackgroundTransparency = 1
+	subtitle.Text = "BY SAGG SCEPTER"
+	subtitle.Font = Enum.Font.GothamMedium
+	subtitle.TextSize = 16
+	subtitle.TextColor3 = Color3.fromRGB(200,200,220)
+	subtitle.TextScaled = true
+	subtitle.Parent = center
+
+	local barBg = Instance.new("Frame")
+	barBg.Size = UDim2.new(0.8,0,0,6)
+	barBg.Position = UDim2.new(0.1,0,0,95)
+	barBg.BackgroundColor3 = Color3.fromRGB(60,60,80)
+	barBg.BorderSizePixel = 0
+	barBg.Parent = center
+	Instance.new("UICorner", barBg).CornerRadius = UDim.new(1,0)
+
+	local barFill = Instance.new("Frame")
+	barFill.Size = UDim2.new(0,0,1,0)
+	barFill.BackgroundColor3 = THEME.Accent
+	barFill.BorderSizePixel = 0
+	barFill.Parent = barBg
+	Instance.new("UICorner", barFill).CornerRadius = UDim.new(1,0)
+	table.insert(accentElements, barFill)
+	barFill:SetAttribute("ColorType", "Accent")
+
+	local loadingText = Instance.new("TextLabel")
+	loadingText.Size = UDim2.new(1,0,0,20)
+	loadingText.Position = UDim2.new(0,0,0,110)
+	loadingText.BackgroundTransparency = 1
+	loadingText.Text = "Loading..."
+	loadingText.Font = Enum.Font.Gotham
+	loadingText.TextSize = 14
+	loadingText.TextColor3 = Color3.fromRGB(180,180,200)
+	loadingText.Parent = center
+
+	-- ========== ACCURATE LOADING ==========
+	local startTime = tick()
+	local duration = config.loadingDuration
+	local connection
+	connection = RunService.Heartbeat:Connect(function()
+		local elapsed = tick() - startTime
+		local progress = math.min(elapsed / duration, 1)
+		barFill.Size = UDim2.new(progress, 0, 1, 0)
+		if progress >= 1 then
+			connection:Disconnect()
+			TweenService:Create(loading, TweenInfo.new(0.5), {BackgroundTransparency = 1}):Play()
+			task.wait(0.5)
+			loading.Visible = false
+			OpenBtn.Visible = true
+		end
+	end)
+
+	-- ========== OPEN BUTTON ==========
+	local openBtn = Instance.new("TextButton")
+	openBtn.Name = "OpenButton"
+	openBtn.Size = UDim2.new(0,120,0,40)
+	openBtn.Position = UDim2.new(0,20,0.5,-20)
+	openBtn.BackgroundColor3 = THEME.Accent
+	openBtn.Text = "SAGG LIBRARY"
+	openBtn.TextColor3 = Color3.fromRGB(255,255,255)
+	openBtn.Font = Enum.Font.GothamBold
+	openBtn.TextSize = 14
+	openBtn.AutoButtonColor = false
+	openBtn.Visible = false
+	openBtn.ZIndex = 100
+	openBtn.Parent = ScreenGui
+	Instance.new("UICorner", openBtn).CornerRadius = UDim.new(0,8)
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = THEME.AccentDark
+	stroke.Thickness = 2
+	stroke.Parent = openBtn
+	stroke:SetAttribute("ColorType", "AccentDark")
+	table.insert(accentElements, stroke)
+	local openScale = Instance.new("UIScale", openBtn)
+	OpenBtn = openBtn
+	MakeDraggable(openBtn, openBtn)
+	table.insert(accentElements, openBtn)
+	openBtn:SetAttribute("ColorType", "Accent")
+
+	-- ========== MAIN WINDOW ==========
+	local main = Instance.new("Frame")
+	main.Name = "Main"
+	main.Size = UDim2.new(0,460,0,320)
+	main.Position = UDim2.new(0.5,-230,0.5,-160)
+	main.BackgroundColor3 = THEME.Background
+	main.BorderSizePixel = 0
+	main.ClipsDescendants = true
+	main.Active = true
+	main.Visible = false
+	main.Parent = ScreenGui
+	Instance.new("UICorner", main).CornerRadius = UDim.new(0,16)
+	local mainScale = Instance.new("UIScale", main)
+	local mainStroke = Instance.new("UIStroke")
+	mainStroke.Color = THEME.Accent
+	mainStroke.Thickness = 1.5
+	mainStroke.Transparency = 0.5
+	mainStroke.Parent = main
+	mainStroke:SetAttribute("ColorType", "Accent")
+	table.insert(accentElements, mainStroke)
+	MainFrame = main
+	table.insert(schemeElements, main)
+	main:SetAttribute("ColorType", "Background")
+	workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(UpdateScale)
+	UpdateScale()
+
+	-- Top Bar
+	local topBar = Instance.new("Frame")
+	topBar.Name = "TopBar"
+	topBar.Size = UDim2.new(1,0,0,48)
+	topBar.Position = UDim2.new(0,0,0,4)
+	topBar.BackgroundTransparency = 1
+	topBar.ZIndex = 10
+	topBar.Active = true
+	topBar.Parent = main
+	MakeDraggable(main, topBar)
+
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size = UDim2.new(0,250,1,0)
+	titleLabel.Position = UDim2.new(0,18,0,0)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Text = "SAGG LIBRARY | " .. SCRIPT_NAME
+	titleLabel.Font = Enum.Font.GothamBold
+	titleLabel.TextSize = 15
+	titleLabel.TextColor3 = THEME.Text
+	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+	titleLabel.ZIndex = 10
+	titleLabel.Parent = topBar
+	table.insert(schemeElements, titleLabel)
+	titleLabel:SetAttribute("ColorType", "Text")
+
+	local closeBtn = Instance.new("TextButton")
+	closeBtn.Size = UDim2.new(0,34,0,34)
+	closeBtn.Position = UDim2.new(1,-44,0.5,-17)
+	closeBtn.BackgroundColor3 = THEME.Card
+	closeBtn.Text = "─"
+	closeBtn.TextColor3 = THEME.SubText
+	closeBtn.Font = Enum.Font.GothamBold
+	closeBtn.TextSize = 16
+	closeBtn.AutoButtonColor = false
+	closeBtn.ZIndex = 10
+	closeBtn.Parent = topBar
+	Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0,10)
+	table.insert(schemeElements, closeBtn)
+	closeBtn:SetAttribute("ColorType", "Card")
+	closeBtn.MouseEnter:Connect(function()
+		TweenService:Create(closeBtn, TweenInfo.new(0.15), {BackgroundColor3 = THEME.CardHover}):Play()
+	end)
+	closeBtn.MouseLeave:Connect(function()
+		TweenService:Create(closeBtn, TweenInfo.new(0.15), {BackgroundColor3 = THEME.Card}):Play()
+	end)
+	closeBtn.MouseButton1Click:Connect(function() UILib:Close() end)
+	openBtn.MouseButton1Click:Connect(function() UILib:Open() end)
+
+	-- Sidebar
+	local sidebar = Instance.new("Frame")
+	sidebar.Name = "Sidebar"
+	sidebar.Size = UDim2.new(0,120,1,-58)
+	sidebar.Position = UDim2.new(0,8,0,54)
+	sidebar.BackgroundColor3 = THEME.Sidebar
+	sidebar.BorderSizePixel = 0
+	sidebar.Parent = main
+	Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0,12)
+	Sidebar = sidebar
+	table.insert(schemeElements, sidebar)
+	sidebar:SetAttribute("ColorType", "Sidebar")
+	local sidebarList = Instance.new("UIListLayout")
+	sidebarList.Padding = UDim.new(0,6)
+	sidebarList.SortOrder = Enum.SortOrder.LayoutOrder
+	sidebarList.Parent = sidebar
+	local sidebarPad = Instance.new("UIPadding")
+	sidebarPad.PaddingTop = UDim.new(0,10)
+	sidebarPad.PaddingLeft = UDim.new(0,8)
+	sidebarPad.PaddingRight = UDim.new(0,8)
+	sidebarPad.Parent = sidebar
+
+	-- Content
+	local content = Instance.new("ScrollingFrame")
+	content.Name = "Content"
+	content.Size = UDim2.new(1,-148,1,-66)
+	content.Position = UDim2.new(0,138,0,58)
+	content.BackgroundTransparency = 1
+	content.BorderSizePixel = 0
+	content.ScrollBarThickness = 4
+	content.ScrollBarImageColor3 = THEME.Accent
+	content.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	content.CanvasSize = UDim2.new(0,0,0,0)
+	content.ClipsDescendants = false
+	content.Parent = main
+	Content = content
+	local contentList = Instance.new("UIListLayout")
+	contentList.Padding = UDim.new(0,8)
+	contentList.SortOrder = Enum.SortOrder.LayoutOrder
+	contentList.Parent = content
+	local contentPad = Instance.new("UIPadding")
+	contentPad.PaddingRight = UDim.new(0,6)
+	contentPad.PaddingBottom = UDim.new(0,6)
+	contentPad.PaddingTop = UDim.new(0,2)
+	contentPad.Parent = content
+end
+
+-- ============================
+--  TAB CREATION
+-- ============================
+local function CreateTabElement(name, layoutOrder)
+	layoutOrder = layoutOrder or 0
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1,0,0,38)
+	btn.BackgroundColor3 = THEME.Sidebar
+	btn.Text = name
+	btn.Font = Enum.Font.GothamMedium
+	btn.TextSize = 13
+	btn.TextColor3 = THEME.SubText
+	btn.AutoButtonColor = false
+	btn.Parent = Sidebar
+	btn.LayoutOrder = layoutOrder
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0,10)
+	table.insert(schemeElements, btn)
+	btn:SetAttribute("ColorType", "Sidebar")
+
+	local page = Instance.new("Frame")
+	page.Size = UDim2.new(1,0,0,0)
+	page.AutomaticSize = Enum.AutomaticSize.Y
+	page.BackgroundTransparency = 1
+	page.Visible = false
+	page.Parent = Content
+	local pageList = Instance.new("UIListLayout")
+	pageList.Padding = UDim.new(0,8)
+	pageList.SortOrder = Enum.SortOrder.LayoutOrder
+	pageList.Parent = page
+
+	TabButtons[name] = btn
+	TabPages[name] = page
+
+	local function select()
+		for n, b in pairs(TabButtons) do
+			local active = (n == name)
+			TweenService:Create(b, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+				BackgroundColor3 = active and THEME.Accent or THEME.Sidebar,
+				TextColor3 = active and Color3.fromRGB(255,255,255) or THEME.SubText
+			}):Play()
+			TabPages[n].Visible = active
+		end
+		CurrentTab = name
+	end
+	btn.MouseButton1Click:Connect(select)
+	if not CurrentTab then select() end
+
+	table.insert(accentElements, btn)
+	btn:SetAttribute("ColorType", "Accent")
+
+	local tabAPI = {}
+
+	function tabAPI:Button(text, callback)
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.new(1,0,0,42)
+		b.BackgroundColor3 = THEME.Card
+		b.Text = text
+		b.Font = Enum.Font.GothamMedium
+		b.TextSize = 13
+		b.TextColor3 = THEME.Text
+		b.AutoButtonColor = false
+		b.Parent = page
+		Instance.new("UICorner", b).CornerRadius = UDim.new(0,10)
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = THEME.Accent
+		stroke.Transparency = 0.7
+		stroke.Thickness = 1
+		stroke.Parent = b
+		stroke:SetAttribute("ColorType", "Accent")
+		table.insert(accentElements, stroke)
+		table.insert(schemeElements, b)
+		b:SetAttribute("ColorType", "Card")
+		b.MouseEnter:Connect(function()
+			TweenService:Create(b, TweenInfo.new(0.15), {BackgroundColor3 = THEME.CardHover}):Play()
+		end)
+		b.MouseLeave:Connect(function()
+			TweenService:Create(b, TweenInfo.new(0.15), {BackgroundColor3 = THEME.Card}):Play()
+		end)
+		b.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				TweenService:Create(b, TweenInfo.new(0.1), {Size = UDim2.new(1,-4,0,38)}):Play()
+			end
+		end)
+		b.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				TweenService:Create(b, TweenInfo.new(0.1), {Size = UDim2.new(1,0,0,42)}):Play()
+			end
+		end)
+		b.MouseButton1Click:Connect(function()
+			if callback then callback() end
+		end)
+		return b
+	end
+
+	function tabAPI:Toggle(text, default, callback)
+		local state = default or false
+		local frame = Instance.new("Frame")
+		frame.Size = UDim2.new(1,0,0,44)
+		frame.BackgroundColor3 = THEME.Card
+		frame.Parent = page
+		Instance.new("UICorner", frame).CornerRadius = UDim.new(0,10)
+		table.insert(schemeElements, frame)
+		frame:SetAttribute("ColorType", "Card")
+
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.new(1,-64,1,0)
+		label.Position = UDim2.new(0,14,0,0)
+		label.BackgroundTransparency = 1
+		label.Text = text
+		label.Font = Enum.Font.GothamMedium
+		label.TextSize = 13
+		label.TextColor3 = THEME.Text
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.Parent = frame
+		table.insert(schemeElements, label)
+		label:SetAttribute("ColorType", "Text")
+
+		local switch = Instance.new("Frame")
+		switch.Size = UDim2.new(0,46,0,24)
+		switch.Position = UDim2.new(1,-58,0.5,-12)
+		switch.BackgroundColor3 = state and THEME.Accent or Color3.fromRGB(225,220,235)
+		switch.Parent = frame
+		Instance.new("UICorner", switch).CornerRadius = UDim.new(1,0)
+		table.insert(accentElements, switch)
+		switch:SetAttribute("ColorType", "Accent")
+
+		local knob = Instance.new("Frame")
+		knob.Size = UDim2.new(0,18,0,18)
+		knob.Position = state and UDim2.new(1,-21,0.5,-9) or UDim2.new(0,3,0.5,-9)
+		knob.BackgroundColor3 = Color3.fromRGB(255,255,255)
+		knob.Parent = switch
+		Instance.new("UICorner", knob).CornerRadius = UDim.new(1,0)
+
+		local click = Instance.new("TextButton")
+		click.Size = UDim2.new(1,0,1,0)
+		click.BackgroundTransparency = 1
+		click.Text = ""
+		click.Parent = frame
+
+		click.MouseButton1Click:Connect(function()
+			state = not state
+			TweenService:Create(switch, TweenInfo.new(0.25, Enum.EasingStyle.Quint), {
+				BackgroundColor3 = state and THEME.Accent or Color3.fromRGB(225,220,235)
+			}):Play()
+			TweenService:Create(knob, TweenInfo.new(0.25, Enum.EasingStyle.Quint), {
+				Position = state and UDim2.new(1,-21,0.5,-9) or UDim2.new(0,3,0.5,-9)
+			}):Play()
+			if callback then callback(state) end
+		end)
+		return frame
+	end
+
+	function tabAPI:Slider(text, min, max, default, callback)
+		local value = default or min
+		local frame = Instance.new("Frame")
+		frame.Size = UDim2.new(1,0,0,56)
+		frame.BackgroundColor3 = THEME.Card
+		frame.Parent = page
+		Instance.new("UICorner", frame).CornerRadius = UDim.new(0,10)
+		table.insert(schemeElements, frame)
+		frame:SetAttribute("ColorType", "Card")
+
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.new(1,-20,0,20)
+		label.Position = UDim2.new(0,14,0,8)
+		label.BackgroundTransparency = 1
+		label.Text = text .. "   " .. tostring(value)
+		label.Font = Enum.Font.GothamMedium
+		label.TextSize = 13
+		label.TextColor3 = THEME.Text
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.Parent = frame
+		table.insert(schemeElements, label)
+		label:SetAttribute("ColorType", "Text")
+
+		local bar = Instance.new("Frame")
+		bar.Size = UDim2.new(1,-28,0,8)
+		bar.Position = UDim2.new(0,14,0,36)
+		bar.BackgroundColor3 = Color3.fromRGB(225,220,235)
+		bar.Parent = frame
+		Instance.new("UICorner", bar).CornerRadius = UDim.new(1,0)
+
+		local fill = Instance.new("Frame")
+		fill.Size = UDim2.new((value-min)/(max-min),0,1,0)
+		fill.BackgroundColor3 = THEME.Accent
+		fill.Parent = bar
+		Instance.new("UICorner", fill).CornerRadius = UDim.new(1,0)
+		table.insert(accentElements, fill)
+		fill:SetAttribute("ColorType", "Accent")
+
+		local drag = Instance.new("TextButton")
+		drag.Size = UDim2.new(1,0,1,24)
+		drag.Position = UDim2.new(0,0,0,-8)
+		drag.BackgroundTransparency = 1
+		drag.Text = ""
+		drag.Parent = bar
+
+		local sliding = false
+		local connection
+		local function update(input)
+			local rel = math.clamp((input.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+			value = math.floor(min + (max-min) * rel)
+			TweenService:Create(fill, TweenInfo.new(0.05), {Size = UDim2.new(rel,0,1,0)}):Play()
+			label.Text = text .. "   " .. tostring(value)
+			if callback then callback(value) end
+		end
+		drag.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				sliding = true
+				update(input)
+				connection = UIS.InputChanged:Connect(function(change)
+					if change.UserInputType == Enum.UserInputType.MouseMovement or change.UserInputType == Enum.UserInputType.Touch then
+						update(change)
+					end
+				end)
+			end
+		end)
+		drag.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				sliding = false
+				if connection then
+					connection:Disconnect()
+					connection = nil
+				end
+			end
+		end)
+		return frame
+	end
+
+	function tabAPI:Label(text)
+		local l = Instance.new("TextLabel")
+		l.Size = UDim2.new(1,0,0,22)
+		l.BackgroundTransparency = 1
+		l.Text = text
+		l.Font = Enum.Font.GothamBold
+		l.TextSize = 12
+		l.TextColor3 = THEME.SubText
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.Parent = page
+		table.insert(schemeElements, l)
+		l:SetAttribute("ColorType", "SubText")
+		return l
+	end
+
+	function tabAPI:Dropdown(text, options, default, callback)
+		local selected = default or options[1]
+		local open = false
+		local frame = Instance.new("Frame")
+		frame.Size = UDim2.new(1,0,0,44)
+		frame.BackgroundColor3 = THEME.Card
+		frame.ClipsDescendants = true
+		frame.ZIndex = 2
+		frame.Parent = page
+		Instance.new("UICorner", frame).CornerRadius = UDim.new(0,10)
+		table.insert(schemeElements, frame)
+		frame:SetAttribute("ColorType", "Card")
+		frame:SetAttribute("Open", false)
+		table.insert(allDropdowns, frame)
+
+		local label = Instance.new("TextLabel")
+		label.Size = UDim2.new(1,-40,0,44)
+		label.Position = UDim2.new(0,14,0,0)
+		label.BackgroundTransparency = 1
+		label.Text = text .. ": " .. selected
+		label.Font = Enum.Font.GothamMedium
+		label.TextSize = 13
+		label.TextColor3 = THEME.Text
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.ZIndex = 3
+		label.Parent = frame
+		table.insert(schemeElements, label)
+		label:SetAttribute("ColorType", "Text")
+
+		local arrow = Instance.new("TextLabel")
+		arrow.Name = "Arrow"
+		arrow.Size = UDim2.new(0,30,0,44)
+		arrow.Position = UDim2.new(1,-34,0,0)
+		arrow.BackgroundTransparency = 1
+		arrow.Text = "▾"
+		arrow.TextColor3 = THEME.SubText
+		arrow.Font = Enum.Font.GothamBold
+		arrow.TextSize = 14
+		arrow.ZIndex = 3
+		arrow.Parent = frame
+		table.insert(schemeElements, arrow)
+		arrow:SetAttribute("ColorType", "SubText")
+
+		local optionsList = Instance.new("Frame")
+		optionsList.Size = UDim2.new(1,0,0,#options * 34)
+		optionsList.Position = UDim2.new(0,0,0,44)
+		optionsList.BackgroundTransparency = 1
+		optionsList.ZIndex = 3
+		optionsList.Parent = frame
+		local optList = Instance.new("UIListLayout")
+		optList.Padding = UDim.new(0,2)
+		optList.SortOrder = Enum.SortOrder.LayoutOrder
+		optList.Parent = optionsList
+
+		for _, opt in ipairs(options) do
+			local optBtn = Instance.new("TextButton")
+			optBtn.Size = UDim2.new(1,0,0,34)
+			optBtn.BackgroundColor3 = THEME.CardHover
+			optBtn.Text = opt
+			optBtn.Font = Enum.Font.Gotham
+			optBtn.TextSize = 12
+			optBtn.TextColor3 = THEME.Text
+			optBtn.AutoButtonColor = false
+			optBtn.ZIndex = 4
+			optBtn.Parent = optionsList
+			Instance.new("UICorner", optBtn).CornerRadius = UDim.new(0,6)
+			table.insert(schemeElements, optBtn)
+			optBtn:SetAttribute("ColorType", "CardHover")
+			optBtn.MouseEnter:Connect(function()
+				TweenService:Create(optBtn, TweenInfo.new(0.1), {BackgroundColor3 = THEME.Accent, TextColor3 = Color3.fromRGB(255,255,255)}):Play()
+			end)
+			optBtn.MouseLeave:Connect(function()
+				TweenService:Create(optBtn, TweenInfo.new(0.1), {BackgroundColor3 = THEME.CardHover, TextColor3 = THEME.Text}):Play()
+			end)
+			optBtn.MouseButton1Click:Connect(function()
+				selected = opt
+				label.Text = text .. ": " .. selected
+				open = false
+				frame:SetAttribute("Open", false)
+				arrow.Rotation = 0
+				TweenService:Create(frame, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Size = UDim2.new(1,0,0,44)}):Play()
+				task.delay(0.2, function()
+					if not frame:GetAttribute("Open") then frame.ZIndex = 2 end
+				end)
+				if callback then callback(opt) end
+			end)
+			table.insert(accentElements, optBtn)
+			optBtn:SetAttribute("ColorType", "Accent")
+		end
+
+		local click = Instance.new("TextButton")
+		click.Size = UDim2.new(1,0,0,44)
+		click.BackgroundTransparency = 1
+		click.Text = ""
+		click.ZIndex = 5
+		click.Parent = frame
+		click.MouseButton1Click:Connect(function()
+			open = not open
+			frame:SetAttribute("Open", open)
+			if open then
+				CloseAllDropdowns(frame)
+				frame.ZIndex = 15
+				arrow.Rotation = 180
+			else
+				arrow.Rotation = 0
+				task.delay(0.2, function()
+					if not frame:GetAttribute("Open") then frame.ZIndex = 2 end
+				end)
+			end
+			local target = open and UDim2.new(1,0,0,44 + #options * 34) or UDim2.new(1,0,0,44)
+			TweenService:Create(frame, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Size = target}):Play()
+		end)
+		return frame
+	end
+
+	return tabAPI
+end
+
+-- ============================
+--  PUBLIC API
+-- ============================
+function UILib:CreateTab(name, layoutOrder)
+	if not GUI then BuildGUI() end
+	return CreateTabElement(name, layoutOrder or 0)
+end
+
+function UILib:Open()
+	if not MainFrame or not OpenBtn then return end
+	if MainFrame.Visible then return end
+	OpenBtn.Visible = false
+	MainFrame.Visible = true
+	MainFrame.Size = UDim2.new(0,0,0,0)
+	TweenService:Create(MainFrame, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Size = UDim2.new(0,460,0,320)
+	}):Play()
+end
+
+function UILib:Close()
+	if not MainFrame or not OpenBtn then return end
+	if not MainFrame.Visible then return end
+	local t = TweenService:Create(MainFrame, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Size = UDim2.new(0,0,0,0),
+		Position = UDim2.new(MainFrame.Position.X.Scale, MainFrame.Position.X.Offset + 230,
+							MainFrame.Position.Y.Scale, MainFrame.Position.Y.Offset + 160)
+	})
+	t:Play()
+	t.Completed:Connect(function()
+		MainFrame.Visible = false
+		MainFrame.Size = UDim2.new(0,460,0,320)
+		MainFrame.Position = UDim2.new(0.5,-230,0.5,-160)
+		OpenBtn.Visible = true
+		OpenBtn.Size = UDim2.new(0,0,0,0)
+		TweenService:Create(OpenBtn, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			Size = UDim2.new(0,120,0,40)
+		}):Play()
+	end)
+end
+
+function UILib:Toggle()
+	if not MainFrame or not OpenBtn then return end
+	if MainFrame.Visible then self:Close() else self:Open() end
+end
+
+function UILib:Destroy()
+	if GUI then
+		GUI:Destroy()
+		GUI = nil
+		MainFrame = nil
+		OpenBtn = nil
+		Sidebar = nil
+		Content = nil
+		TabButtons = {}
+		TabPages = {}
+		CurrentTab = nil
+		accentElements = {}
+		schemeElements = {}
+		allDropdowns = {}
+	end
+end
+
+function UILib:SetAccentTheme(themeName)
+	if ACCENT_THEMES[themeName] then
+		config.accentTheme = themeName
+		ApplyThemes()
+		RefreshAllUI()
+		print("[UILib] Accent theme changed to: " .. themeName)
+	else
+		warn("[UILib] Unknown accent theme: " .. tostring(themeName))
+	end
+end
+
+function UILib:SetColourScheme(schemeName)
+	if COLOUR_SCHEMES[schemeName] then
+		config.colorScheme = schemeName
+		ApplyThemes()
+		RefreshAllUI()
+		print("[UILib] Colour scheme changed to: " .. schemeName)
+	else
+		warn("[UILib] Unknown colour scheme: " .. tostring(schemeName))
+	end
+end
+
+function UILib:SetScale(scale)
+	config.scale = math.clamp(scale, 0.6, 1.2)
+	UpdateScale()
+	print("[UILib] Scale set to: " .. config.scale)
+end
+
+function UILib:SetLoadingDuration(seconds)
+	config.loadingDuration = math.clamp(seconds, 1, 5)
+	print("[UILib] Loading duration set to: " .. config.loadingDuration .. "s (next load)")
+end
+
+function UILib:SaveConfig()
+	_G.UILibConfig = config
+	print("[UILib] Config saved.")
+end
+
+function UILib:ResetConfig()
+	config.accentTheme = DEFAULT_CONFIG.accentTheme
+	config.colorScheme = DEFAULT_CONFIG.colorScheme
+	config.scale = DEFAULT_CONFIG.scale
+	ApplyThemes()
+	RefreshAllUI()
+	UpdateScale()
+	print("[UILib] Config reset to defaults.")
+end
+
+-- ============================
+--  BUILD THE GUI
+-- ============================
+BuildGUI()
+
+return UILib
